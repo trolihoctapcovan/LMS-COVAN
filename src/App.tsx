@@ -1,5 +1,5 @@
 // ============================================================================
-// LMS THẦY PHÚC - MAIN APP (STABLE + LMS ASSIGNMENTS)
+// LMS CÔ THANH VÂN - MAIN APP (STABLE + LMS ASSIGNMENTS)
 // - Giữ luồng cũ: Login/Chuyên đề/Thi/Lý thuyết/LeaderBoard/Anti-cheat/AI Tutor
 // - Bổ sung LMS: "Đề được giao" (Assignments) + Start Attempt + Submit kèm assignmentId/attemptId
 // ============================================================================
@@ -828,7 +828,7 @@ const App: React.FC = () => {
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-teal-50 to-emerald-50 p-4">
       <div className="w-full max-w-lg bg-white rounded-[2.5rem] shadow-xl border border-gray-100 overflow-hidden">
         <div className="p-8 bg-gradient-to-r from-teal-600 to-emerald-600 text-white">
-          <div className="text-3xl font-black flex items-center gap-3"><BookOpen size={28}/> LMS Thầy Phúc</div>
+          <div className="text-3xl font-black flex items-center gap-3"><BookOpen size={28}/> LMS CÔ THANH VÂN</div>
           <div className="text-white/90 mt-2 font-semibold">Học & Thi Toán • Giao đề cho lớp • Chống gian lận</div>
         </div>
 
