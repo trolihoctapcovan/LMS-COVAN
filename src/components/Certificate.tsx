@@ -61,7 +61,7 @@ const Certificate: React.FC<Props> = ({ user, topic, score }) => {
     doc.setFont("helvetica", "bold");
     doc.text("Giao Vien", 220, 160, { align: "center" });
     doc.setFont("times", "italic");
-    doc.text("Thay Phuc", 220, 180, { align: "center" });
+    doc.text("CÔ THANH VÂN", 220, 180, { align: "center" });
 
     doc.save(`GiayKhen_${user.name}.pdf`);
   };
@@ -80,7 +80,7 @@ const Certificate: React.FC<Props> = ({ user, topic, score }) => {
          <div className="absolute bottom-0 right-0 w-4 h-4 border-b-4 border-r-4 border-primary-600"></div>
          
          <h3 className="text-2xl font-bold text-primary-800 tracking-widest uppercase mb-1">Giấy Khen</h3>
-         <p className="text-xs text-gray-500 mb-6">LMS Thầy Phúc Toán Đồng Nai</p>
+         <p className="text-xs text-gray-500 mb-6">LMS CÔ THANH VÂN</p>
          
          <p className="text-sm text-gray-600">Vinh danh học sinh</p>
          <p className="text-2xl font-serif italic font-bold text-gray-900 my-4">{user.name}</p>
