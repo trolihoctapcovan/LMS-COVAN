@@ -920,7 +920,7 @@ export const AdminPanel: React.FC<AdminProps> = ({ onLogout }) => {
         <div className="flex items-center gap-3">
           <GraduationCap className="text-teal-600" size={32} />
           <h1 className="text-2xl font-black text-slate-800 tracking-tight">
-            Hệ thống Quản trị <span className="text-teal-500 font-medium">| Thầy Phúc</span>
+            Hệ thống Quản trị <span className="text-teal-500 font-medium">| CÔ THANH VÂN</span>
           </h1>
         </div>
         <button onClick={onLogout} className="px-5 py-2 text-slate-500 hover:text-red-600 font-bold border border-slate-200 rounded-xl transition hover:bg-red-50">
