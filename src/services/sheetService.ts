@@ -21,7 +21,7 @@ import {
 // ==================== CONFIGURATION ====================
 
 // 🔴 QUAN TRỌNG: Thay URL này bằng URL Web App của bạn sau khi deploy code.gs
-export const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyK6E1IZI-wRdNWovcSB-n2_9eiQjYuZWyIaROVtid63anPCxAyuqmyuX3tM0yMd5IyVQ/exec';
+export const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzRTDAdLadiseH1392YFqCWS1SEvnIdsSpARyhKBr4fX0k5WGfNYSw_WkxU3NKFG7MLlQ/exec';
 
 // API Response interface
 interface APIResponse<T = unknown> {
@@ -30,6 +30,25 @@ interface APIResponse<T = unknown> {
   message?: string;
   timestamp?: string;
 }
+
+// ==================== DUOLINGO-LIKE REMINDERS ====================
+// Returned by backend on login (for "hôm qua bạn đã làm..." banner)
+export type ReminderItem = {
+  grade: string;
+  topic: string;
+  count: number;
+  lastSubmittedAt?: string;
+};
+
+export type LoginResponseData = {
+  user: User;
+  sessionToken: string;
+  reminders?: ReminderItem[];
+};
+
+export type SessionWithReminders = Session & {
+  reminders?: ReminderItem[];
+};
 
 // ==================== CORE API HELPER ====================
 
@@ -152,22 +171,23 @@ export const getCurrentUser = (): User | null => {
 
 // ==================== AUTH API ====================
 
-export const loginUser = async (email: string, password: string): Promise<Session | null> => {
+export const loginUser = async (email: string, password: string): Promise<SessionWithReminders | null> => {
   const deviceId = getDeviceId();
-  const result = await callAPI<{ user: User; sessionToken: string }>('login', {
+  const result = await callAPI<LoginResponseData>('login', {
     email: email.trim().toLowerCase(),
     password,
     deviceId
   });
   
   if (result.status === 'success' && result.data) {
-    const session: Session = {
+    const session: SessionWithReminders = {
       user: result.data.user,
       sessionToken: result.data.sessionToken,
       deviceId,
       loginTime: new Date().toISOString()
     };
-    saveSession(session);
+    session.reminders = result.data.reminders || [];
+    saveSession(session as Session);
     return session;
   }
   return null;
