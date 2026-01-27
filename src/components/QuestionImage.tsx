@@ -62,33 +62,33 @@ const QuestionImage: React.FC<QuestionImageProps> = ({
   };
 
   return (
-    <div className={`my-4 relative ${className}`}>
+    <div className={`my-4 relative flex justify-center ${className}`}>
       {loading && !error && (
-        <div className="flex items-center justify-center p-8 bg-gray-50 rounded-xl border-2 border-dashed border-gray-300">
+        <div className="flex items-center justify-center p-6 bg-gray-50 rounded-xl border-2 border-dashed border-gray-300 max-w-md mx-auto">
           <Loader2 className="animate-spin text-teal-600 mr-2" size={20} />
           <span className="text-gray-500 text-sm">Đang tải hình ảnh...</span>
         </div>
       )}
       
       {error && (
-        <div className="flex flex-col items-center justify-center p-6 bg-red-50 rounded-xl border-2 border-dashed border-red-300">
-          <AlertCircle className="text-red-500 mb-2" size={24} />
+        <div className="flex flex-col items-center justify-center p-4 bg-red-50 rounded-xl border-2 border-dashed border-red-300 max-w-md mx-auto">
+          <AlertCircle className="text-red-500 mb-2" size={20} />
           <div className="text-sm text-center">
-            <div className="font-bold text-red-800">Không thể tải ảnh</div>
-            <div className="text-red-600 text-xs mt-1 font-mono">ID: {cleanId}</div>
-            <div className="flex gap-2 mt-3 justify-center">
+            <div className="font-bold text-red-800 text-xs">Không thể tải ảnh</div>
+            <div className="text-red-600 text-[10px] mt-1 font-mono">ID: {cleanId}</div>
+            <div className="flex gap-2 mt-2 justify-center">
               <button
                 onClick={handleRetry}
-                className="flex items-center gap-1 px-3 py-1.5 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg text-xs font-medium transition-colors"
+                className="flex items-center gap-1 px-2 py-1 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg text-[10px] font-medium transition-colors"
               >
-                <RefreshCw size={12} />
+                <RefreshCw size={10} />
                 Thử lại
               </button>
               <a 
                 href={`https://drive.google.com/file/d/${cleanId}/view`}
                 target="_blank" 
                 rel="noopener noreferrer"
-                className="px-3 py-1.5 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg text-xs font-medium transition-colors"
+                className="px-2 py-1 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg text-[10px] font-medium transition-colors"
               >
                 Mở trong Drive
               </a>
@@ -100,7 +100,8 @@ const QuestionImage: React.FC<QuestionImageProps> = ({
       <img
         src={currentUrl}
         alt={alt}
-        className={`max-w-full h-auto rounded-xl shadow-lg border border-gray-200 ${loading || error ? 'hidden' : 'block'}`}
+        className={`h-auto rounded-xl shadow-md border border-gray-200 mx-auto ${loading || error ? 'hidden' : 'block'}`}
+        style={{ maxWidth: '320px', maxHeight: '280px', objectFit: 'contain' }}
         onLoad={handleImageLoad}
         onError={handleImageError}
         referrerPolicy="no-referrer"
