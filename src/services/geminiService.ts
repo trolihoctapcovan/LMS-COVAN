@@ -4,7 +4,7 @@
  * Package: @google/genai v1.30.0
  */
 import { GoogleGenAI } from "@google/genai";
-import { TutorContext, TutorResponse, Question, Theory } from '../types';
+import { TutorContext, TutorResponse, Question, Theory, ChatMessage } from '../types';
 
 // API Key từ environment - QUAN TRỌNG: Dùng import.meta.env cho Vite
 const ai = new GoogleGenAI({ 
@@ -92,45 +92,56 @@ function restoreImages(text: string, imageMap: Map<string, string>): string {
 }
 
 /**
- * Helper: Build system prompt for tutor
- */
-function buildSystemPrompt(hintLevel: number, context?: TutorContext): string {
-  const base = `Bạn là Trợ Lý Thầy Phúc. Hỗ trợ học sinh giải toán. Dùng LaTeX $...$ cho công thức.`;
-  const contextInfo = context ? `\nBài toán: ${context.questionText || ''}\n` : '';
-  const levelInfo = [
-    "Chỉ gợi ý hướng đi, không giải bài.",
-    "Gợi ý công thức cần dùng.",
-    "Hướng dẫn từng bước, chưa ra đáp số.",
-    "Giải chi tiết và ra đáp số."
-  ];
-  return `${base}\n${contextInfo}\nLevel hỗ trợ: ${levelInfo[hintLevel] || levelInfo[0]}`;
-}
-
-/**
- * Helper: Fallback response when AI fails
- */
-function getFallbackResponse(hintLevel: number, context?: TutorContext): TutorResponse {
-  return {
-    message: "Hệ thống AI đang bận hoặc gặp sự cố. Em hãy thử lại sau nhé.",
-    hintLevel,
-    isFullSolution: false
-  };
-}
-
-/**
- * Hỏi AI Tutor
+ * Hỏi AI Tutor - Hỗ trợ chat history
+ * @param chatHistory - Lịch sử chat trước đó
+ * @param userMessage - Tin nhắn hiện tại của user
+ * @param context - Context về bài toán hiện tại
  */
 export const askAITutor = async (
+  chatHistory: ChatMessage[],
   userMessage: string,
   context?: TutorContext
-): Promise<TutorResponse> => {
+): Promise<string> => {
   const hintLevel = context?.questionId ? getHintLevel(context.questionId) : 0;
-  const systemPrompt = buildSystemPrompt(hintLevel, context);
+  
+  // Build system prompt với context đầy đủ hơn
+  const systemPrompt = `Bạn là Trợ Lý Thầy Phúc - AI tutor hỗ trợ học sinh giải toán.
+
+NGUYÊN TẮC:
+- Dùng LaTeX $...$ cho công thức toán
+- Giải thích rõ ràng, dễ hiểu
+- Khuyến khích học sinh tự suy nghĩ trước khi đưa đáp án
+- Trả lời ngắn gọn, súc tích
+
+${context ? `THÔNG TIN BÀI TOÁN HIỆN TẠI:
+- Lớp: ${(context as any).grade || 'N/A'}
+- Chủ đề: ${(context as any).topic || 'N/A'}
+- Level: ${(context as any).level || 'N/A'}
+- Loại câu hỏi: ${(context as any).questionType || 'N/A'}
+- Nội dung: ${(context as any).question || context.questionText || 'N/A'}
+- Học sinh đang chọn: ${context.userAnswer || 'Chưa chọn'}
+` : ''}
+
+Hãy trả lời một cách thân thiện và hữu ích!`;
+
+  // Build chat prompt with history
+  let fullPrompt = systemPrompt + '\n\n=== LỊCH SỬ CHAT ===\n';
+  
+  // Add recent chat history (last 6 messages for context)
+  const recentHistory = Array.isArray(chatHistory) ? chatHistory.slice(-6) : [];
+  for (const msg of recentHistory) {
+    if (msg && msg.role && msg.content) {
+      fullPrompt += `${msg.role === 'user' ? 'Học sinh' : 'Trợ lý'}: ${msg.content}\n`;
+    }
+  }
+  
+  // Add current user message
+  fullPrompt += `\n=== CÂU HỎI MỚI ===\nHọc sinh: ${userMessage}\n\nTrợ lý:`;
   
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.0-flash-exp',
-      contents: `${systemPrompt}\n\nCâu hỏi của học sinh: ${userMessage}`,
+      model: 'gemini-3-flash-preview',
+      contents: fullPrompt,
       config: {
         temperature: 0.7,
         topK: 40,
@@ -138,23 +149,19 @@ export const askAITutor = async (
       },
     });
     
-    // QUAN TRỌNG: Với @google/genai, response.text là property, KHÔNG phải method
+    // QUAN TRỌNG: Với @google/genai, response.text là property
     const message = response.text;
     
-    if (message) {
+    if (message && typeof message === 'string') {
       if (context?.questionId && userMessage.toLowerCase().includes('gợi ý')) {
         incrementHintLevel(context.questionId);
       }
-      return {
-        message,
-        hintLevel,
-        isFullSolution: hintLevel >= 3
-      };
+      return message;
     }
-    return getFallbackResponse(hintLevel, context);
+    return "Mình gặp lỗi khi trả lời. Bạn thử lại nhé.";
   } catch (error) {
     console.error('AI Tutor error:', error);
-    return getFallbackResponse(hintLevel, context);
+    return "Hệ thống AI đang bận hoặc gặp sự cố. Em hãy thử lại sau nhé.";
   }
 };
 
@@ -215,7 +222,7 @@ export const generateQuestionFromAI = async (
     }
 
     const response = await ai.models.generateContent({
-      model: 'gemini-2.0-flash-exp',
+      model: 'gemini-3-flash-preview',
       contents: prompt,
       config: {
         responseMimeType: 'application/json',
@@ -254,7 +261,7 @@ export const performOCR = async (base64Data: string, mimeType: string): Promise<
     `;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-2.0-flash-exp',
+      model: 'gemini-3-flash-preview',
       contents: {
         parts: [
           {
@@ -301,7 +308,7 @@ export const parseQuestionsFromMarkdown = async (markdownText: string, grade: nu
 
   try {
     const response = await ai.models.generateContent({
-        model: 'gemini-2.0-flash-exp',
+        model: 'gemini-3-flash-preview',
         contents: prompt,
         config: {
             responseMimeType: 'application/json',
@@ -353,7 +360,7 @@ Lưu ý:
 `;
 
         const response = await ai.models.generateContent({
-            model: 'gemini-2.0-flash-exp',
+            model: 'gemini-3-flash-preview',
             contents: prompt,
             config: {
                 responseMimeType: 'application/json',
