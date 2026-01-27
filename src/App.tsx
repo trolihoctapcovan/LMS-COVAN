@@ -1,7 +1,11 @@
 // ============================================================================
-// LMS CÔ THANH VÂN - MAIN APP (STABLE + LMS ASSIGNMENTS)
-// - Giữ luồng cũ: Login/Chuyên đề/Thi/Lý thuyết/LeaderBoard/Anti-cheat/AI Tutor
-// - Bổ sung LMS: "Đề được giao" (Assignments) + Start Attempt + Submit kèm assignmentId/attemptId
+// LMS THẦY PHÚC - MAIN APP (FIXED VERSION)
+// Các sửa đổi:
+// 1. Chuyển tab 1 lần là nộp bài (thay vì 3 lần)
+// 2. Ẩn lý thuyết khi mở chuyên đề, chỉ hiện sau khi làm bài không đạt
+// 3. Thêm icon khóa cho level chưa mở
+// 4. Xử lý reminders sau khi đăng nhập
+// 5. Sửa submissionReason khi cheat_tab
 // ============================================================================
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
@@ -22,6 +26,7 @@ import {
   GOOGLE_SCRIPT_URL,
   fetchExamByLink
 } from './services/sheetService';
+import type { ReminderItem } from './services/sheetService';
 import { askAITutor, incrementHintLevel, resetAllHints } from './services/geminiService';
 import MathText from './components/MathText';
 import QuestionImage from './components/QuestionImage';
@@ -64,6 +69,10 @@ const App: React.FC = () => {
   const [view, setView] = useState<ViewState>(ViewState.LOGIN);
   const [sessionToken, setSessionToken] = useState<string>('');
 
+  // ==================== DUOLINGO-LIKE REMINDERS ====================
+  const [loginReminders, setLoginReminders] = useState<ReminderItem[]>([]);
+  const [showLoginReminder, setShowLoginReminder] = useState(false);
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -86,6 +95,9 @@ const App: React.FC = () => {
 
   const [theory, setTheory] = useState<Theory | null>(null);
   const [quizResult, setQuizResult] = useState<QuizResult | null>(null);
+  
+  // ★ THÊM: State để lưu user progress (dùng cho khóa level)
+  const [userProgress, setUserProgress] = useState<Record<string, number>>({});
 
   const [quizState, setQuizState] = useState<QuizState>({
     questions: [],
@@ -128,9 +140,13 @@ const App: React.FC = () => {
     }
   };
 
-  const formatTime = (sec: number) => {
-    const m = Math.floor(sec / 60);
-    const s = sec % 60;
+  const formatTime = (sec: number | undefined | null): string => {
+    if (sec === undefined || sec === null || isNaN(Number(sec)) || !isFinite(Number(sec))) {
+      return '0:00';
+    }
+    const safeSec = Math.max(0, Math.floor(Number(sec)));
+    const m = Math.floor(safeSec / 60);
+    const s = safeSec % 60;
     return `${m}:${String(s).padStart(2, '0')}`;
   };
 
@@ -139,6 +155,14 @@ const App: React.FC = () => {
       const el = chatScrollRef.current;
       if (el) el.scrollTop = el.scrollHeight;
     });
+  };
+  
+  // ★ THÊM: Helper kiểm tra level đã mở khóa chưa
+  const isLevelUnlocked = (level: number): boolean => {
+    if (level === 1) return true; // Level 1 luôn mở
+    const progressKey = `${selectedGrade}_${selectedTopic}`;
+    const currentUnlockedLevel = userProgress[progressKey] || 1;
+    return level <= currentUnlockedLevel;
   };
 
   // ==================== GAS DIRECT CALL (FOR LMS ACTIONS) ====================
@@ -162,7 +186,6 @@ const App: React.FC = () => {
       const data = await callGAS<AssignedExam[]>('getAssignedExamsForStudent', { email: user.email, sessionToken });
       setAssignedExams(Array.isArray(data) ? data : []);
     } catch (e: any) {
-      // Không chặn app nếu LMS lỗi
       console.error(e);
     } finally {
       setAssignedLoading(false);
@@ -177,7 +200,6 @@ const App: React.FC = () => {
 
     if (assignmentId) {
       setPendingAssignmentId(assignmentId);
-      // Nếu chưa login, đưa về LOGIN và chọn tab account
       setLoginMode('account');
       setView(ViewState.LOGIN);
     }
@@ -193,14 +215,17 @@ const App: React.FC = () => {
     const session = getSession();
     if (!session) return;
 
-    // restore
     setUser(session.user);
     setSessionToken(session.sessionToken);
     setSelectedGrade(Number((session.user as any)?.grade || 6) || 6);
     setView(ViewState.DASHBOARD);
     setDashboardTab('topics');
+    
+    // ★ THÊM: Load user progress để biết level nào đã mở
+    if (session.user?.progress) {
+      setUserProgress(session.user.progress);
+    }
 
-    // load initial
     (async () => {
       try {
         const t = await fetchTopics(selectedGrade);
@@ -208,12 +233,10 @@ const App: React.FC = () => {
       } catch {}
     })();
 
-    // Load assignments for student
     if (session.user?.role === 'student' || !session.user?.role) {
       setDashboardTab('assigned');
       loadAssignedExams();
     }
-
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -258,10 +281,10 @@ const App: React.FC = () => {
     return () => document.removeEventListener('visibilitychange', onVisibility);
   }, [view, quizState.isComplete]);
 
-  // Auto submit on too many tab switches (optional threshold)
+  // ★ SỬA: Chuyển tab 1 lần là nộp bài ngay (thay vì 3 lần)
   useEffect(() => {
     if (view !== ViewState.QUIZ || quizState.isComplete) return;
-    if (quizState.tabSwitchCount >= 3) {
+    if (quizState.tabSwitchCount >= 1) {  // ★ ĐỔI TỪ 3 THÀNH 1
       handleFinishQuiz('cheat_tab');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -274,17 +297,14 @@ const App: React.FC = () => {
       try {
         const t = await fetchTopics(selectedGrade);
         setTopics(t);
-      } catch (e) {
-        // ignore
-      }
+      } catch (e) {}
     })();
   }, [selectedGrade, view]);
 
   // ==================== AUTO START ASSIGNMENT IF URL HAS assignmentId ====================
   useEffect(() => {
     if (!pendingAssignmentId) return;
-    if (!user) return; // wait login
-    // Only students
+    if (!user) return;
     if (user.role && user.role !== 'student') return;
 
     (async () => {
@@ -295,7 +315,6 @@ const App: React.FC = () => {
         setPendingAssignmentId(null);
       }
     })();
-
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingAssignmentId, user]);
 
@@ -311,15 +330,25 @@ const App: React.FC = () => {
       }
       setUser(session.user);
       setSessionToken(session.sessionToken);
+      
+      // ★ THÊM: Xử lý reminders
+      if (session.reminders && session.reminders.length > 0) {
+        setLoginReminders(session.reminders);
+        setShowLoginReminder(true);
+      }
+      
+      // ★ THÊM: Load user progress
+      if (session.user?.progress) {
+        setUserProgress(session.user.progress);
+      }
+      
       setView(ViewState.DASHBOARD);
 
-      // initial data
       try {
         const t = await fetchTopics(selectedGrade);
         setTopics(t);
       } catch {}
 
-      // dashboard default
       if (session.user?.role === 'teacher' || session.user?.role === 'admin') {
         setDashboardTab('topics');
       } else {
@@ -341,9 +370,12 @@ const App: React.FC = () => {
     clearSession();
     setUser(null);
     setSessionToken('');
+    setLoginReminders([]);
+    setShowLoginReminder(false);
     setView(ViewState.LOGIN);
     setQuizResult(null);
     setTheory(null);
+    setUserProgress({});
     setQuizState({
       questions: [],
       currentQuestionIndex: 0,
@@ -393,7 +425,6 @@ const App: React.FC = () => {
       setChatMessages([{ id: 'sys', role: 'assistant', content: 'Bạn đang làm đề thi. Nếu cần, hãy hỏi trợ lý AI!', timestamp: Date.now() }]);
       setView(ViewState.QUIZ);
 
-      // cleanup URL
       window.history.replaceState({}, document.title, window.location.pathname);
     } catch (e) {
       console.error(e);
@@ -446,7 +477,6 @@ const App: React.FC = () => {
       setChatMessages([{ id: 'sys', role: 'assistant', content: 'Bạn đang làm đề được giao. Chúc bạn làm bài tốt!', timestamp: Date.now() }]);
       setView(ViewState.QUIZ);
 
-      // refresh assigned list after starting (to update attempts used)
       loadAssignedExams();
     } finally {
       setLoading(false);
@@ -454,16 +484,21 @@ const App: React.FC = () => {
   };
 
   // ==================== TOPIC FLOW ====================
+  // ★ SỬA: Không load theory khi chọn topic, chỉ load user progress
   const handleSelectTopic = async (topic: string) => {
     setSelectedTopic(topic);
     setError(null);
     setLoading(true);
+    setTheory(null); // ★ Reset theory - không load ở đây
     try {
-      const th = await fetchTheory(selectedGrade, topic, 1);
-      setTheory(th || null);
-      // progress
+      // ★ Chỉ load user progress để biết level nào đã mở
       if (user) {
-        try { await fetchUserProgress(user.email); } catch {}
+        try { 
+          const progress = await fetchUserProgress(user.email); 
+          if (progress?.progress) {
+            setUserProgress(progress.progress);
+          }
+        } catch {}
       }
       setView(ViewState.TOPIC_SELECT);
     } catch (e: any) {
@@ -474,6 +509,12 @@ const App: React.FC = () => {
   };
 
   const handleStartQuiz = async (level: number) => {
+    // ★ THÊM: Kiểm tra level có được mở không
+    if (!isLevelUnlocked(level)) {
+      setError(`Bạn cần hoàn thành Level ${level - 1} với điểm ≥80% để mở khóa Level ${level}`);
+      return;
+    }
+    
     setError(null);
     setLoading(true);
     try {
@@ -549,7 +590,6 @@ const App: React.FC = () => {
   const handleFinishQuiz = async (reason: QuizState['submissionReason'] = 'normal') => {
     if (quizState.isComplete || quizState.questions.length === 0) return;
 
-    // compute score
     let correctCount = 0;
     const answers = quizState.questions.map((q, idx) => {
       const userAns = String(quizState.userAnswers[idx] ?? '');
@@ -561,9 +601,9 @@ const App: React.FC = () => {
       return { questionId: q.exam_id, userAnswer: userAns, correct: isCorrect };
     });
 
+    // ★ SỬA: Set submissionReason trước khi gọi API
     setQuizState(prev => ({ ...prev, isComplete: true, score: correctCount, endTime: Date.now(), submissionReason: reason }));
 
-    // send to backend if logged in; else local result
     if (user) {
       try {
         const payload: any = {
@@ -576,11 +616,10 @@ const App: React.FC = () => {
           totalQuestions: quizState.questions.length,
           answers,
           timeSpent: elapsedTime,
-          submissionReason: reason,
+          submissionReason: reason, // ★ Đảm bảo truyền đúng reason
           violations: reason !== 'normal' ? [{ type: reason, timestamp: Date.now() }] : []
         };
 
-        // LMS extra
         if (activeAttempt) {
           payload.assignmentId = activeAttempt.assignmentId;
           payload.attemptId = activeAttempt.attemptId;
@@ -590,14 +629,40 @@ const App: React.FC = () => {
 
         const result = await submitQuiz(payload);
         if (result) {
-          setQuizResult(result);
-          if (result.theory) setTheory(result.theory);
+          // ★ SỬA: Ghi đè submissionReason từ client để đảm bảo đúng
+          result.submissionReason = reason;
+          setQuizResult({
+  ...result,
+  score: result.score ?? correctCount,
+  totalQuestions: result.totalQuestions ?? quizState.questions.length,
+  submissionReason: reason
+});
+          
+          // ★ THÊM: Load theory khi không đạt (< 80%)
+          if (!result.passed && result.percentage < 80) {
+            try {
+              const th = await fetchTheory(selectedGrade, selectedTopic, currentLevel);
+              setTheory(th || null);
+            } catch {}
+          } else {
+            setTheory(null);
+          }
+          
+          // ★ THÊM: Cập nhật userProgress nếu đạt
+          if (result.passed && result.canAdvance) {
+            const progressKey = `${selectedGrade}_${selectedTopic}`;
+            setUserProgress(prev => ({
+              ...prev,
+              [progressKey]: currentLevel + 1
+            }));
+          }
         }
       } catch (e) {
         console.error(e);
       }
     } else {
       const pct = Math.round((correctCount / quizState.questions.length) * 100);
+      const passed = pct >= 80 && reason === 'normal';
       setQuizResult({
         email: 'guest',
         topic: selectedTopic,
@@ -606,17 +671,26 @@ const App: React.FC = () => {
         score: correctCount,
         totalQuestions: quizState.questions.length,
         percentage: pct,
-        passed: pct >= 80,
+        passed: passed,
         canAdvance: false,
         timeSpent: elapsedTime,
-        submissionReason: reason,
-        message: 'Kết quả bài thi thử',
+        submissionReason: reason, // ★ Đảm bảo đúng reason
+        message: reason !== 'normal' 
+          ? `Bài thi bị nộp do: ${reason === 'cheat_tab' ? 'Chuyển tab' : reason}` 
+          : 'Kết quả bài thi thử',
         answers,
         timestamp: new Date().toISOString()
       });
+      
+      // ★ THÊM: Load theory cho guest khi không đạt
+      if (!passed) {
+        try {
+          const th = await fetchTheory(selectedGrade, selectedTopic, 1);
+          setTheory(th || null);
+        } catch {}
+      }
     }
 
-    // refresh assigned list after submit
     if (activeAttempt) {
       loadAssignedExams();
     }
@@ -828,7 +902,7 @@ const App: React.FC = () => {
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-teal-50 to-emerald-50 p-4">
       <div className="w-full max-w-lg bg-white rounded-[2.5rem] shadow-xl border border-gray-100 overflow-hidden">
         <div className="p-8 bg-gradient-to-r from-teal-600 to-emerald-600 text-white">
-          <div className="text-3xl font-black flex items-center gap-3"><BookOpen size={28}/> LMS CÔ THANH VÂN</div>
+          <div className="text-3xl font-black flex items-center gap-3"><BookOpen size={28}/> LMS Thầy Phúc</div>
           <div className="text-white/90 mt-2 font-semibold">Học & Thi Toán • Giao đề cho lớp • Chống gian lận</div>
         </div>
 
@@ -931,7 +1005,7 @@ const App: React.FC = () => {
               </button>
 
               <div className="text-xs text-gray-500">
-                * Chế độ này dành cho “đề theo mã” (không cần đăng nhập). Đề được giao theo lớp thì cần đăng nhập.
+                * Chế độ này dành cho "đề theo mã" (không cần đăng nhập). Đề được giao theo lớp thì cần đăng nhập.
               </div>
             </div>
           )}
@@ -984,6 +1058,41 @@ const App: React.FC = () => {
       </div>
 
       <main className="max-w-6xl mx-auto px-4 py-6 space-y-6">
+        {/* ★ Duolingo-like reminder */}
+        {showLoginReminder && loginReminders.length > 0 && (
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <div className="font-black text-amber-900 flex items-center gap-2">
+                <Zap size={18} /> Nhắc học hôm nay
+              </div>
+              <div className="text-sm text-amber-900 mt-1">Hôm qua bạn đã làm:</div>
+
+              <ul className="mt-2 space-y-1 text-sm text-amber-900">
+                {loginReminders.map((r, idx) => (
+                  <li
+                    key={`${r.grade}-${r.topic}-${idx}`}
+                    className="flex items-center justify-between gap-3"
+                  >
+                    <span className="font-semibold truncate">Lớp {r.grade} • {r.topic}</span>
+                    <span className="shrink-0 px-2 py-0.5 rounded-lg bg-amber-200 text-amber-900 font-black">
+                      {r.count} lần
+                    </span>
+                  </li>
+                ))}
+              </ul>
+
+              <div className="text-xs text-amber-800 mt-2">Gợi ý: làm thêm 1 lượt hôm nay để giữ nhịp học.</div>
+            </div>
+
+            <button
+              onClick={() => setShowLoginReminder(false)}
+              className="shrink-0 px-3 py-2 rounded-xl bg-white border border-amber-200 hover:bg-amber-100 font-black text-amber-900"
+            >
+              Đóng
+            </button>
+          </div>
+        )}
+
         {/* Tabs */}
         {(user?.role === 'student' || !user?.role) && (
           <div className="bg-white p-2 rounded-2xl border border-slate-200 inline-flex gap-2">
@@ -1124,7 +1233,7 @@ const App: React.FC = () => {
                     className="p-5 rounded-3xl border border-slate-200 hover:border-teal-300 hover:bg-teal-50 transition-all text-left"
                   >
                     <div className="font-black text-slate-900">{t}</div>
-                    <div className="text-sm text-slate-600 mt-1">Bấm để xem lý thuyết & chọn mức độ</div>
+                    <div className="text-sm text-slate-600 mt-1">Bấm để chọn mức độ</div>
                   </button>
                 ))}
               </div>
@@ -1147,6 +1256,7 @@ const App: React.FC = () => {
     </div>
   );
 
+  // ★ SỬA: renderTopicSelect - Ẩn lý thuyết, thêm icon khóa
   const renderTopicSelect = () => (
     <div className="min-h-screen bg-slate-50">
       <div className="max-w-5xl mx-auto p-4">
@@ -1161,27 +1271,47 @@ const App: React.FC = () => {
           <div />
         </div>
 
-        {theory && (
-          <div className="bg-white p-6 rounded-[2.5rem] border border-slate-200 shadow-sm mb-6">
-            <div className="text-2xl font-black text-slate-900 mb-3">{theory.title || 'Lý thuyết'}</div>
-            <div className="prose max-w-none">
-              <MathText content={theory.content || ''} />
-            </div>
+        {/* ★ BỎ: Không hiện lý thuyết ở đây nữa */}
+
+        {/* ★ THÊM: Thông báo lỗi nếu chọn level chưa mở */}
+        {error && (
+          <div className="mb-4 p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-700 flex gap-2">
+            <AlertCircle size={18}/> <div className="font-semibold">{error}</div>
           </div>
         )}
 
         <div className="bg-white p-6 rounded-[2.5rem] border border-slate-200 shadow-sm">
-          <div className="text-xl font-black text-slate-900 mb-4 flex items-center gap-2"><Target size={20} className="text-teal-600"/> Chọn mức độ</div>
+          <div className="text-xl font-black text-slate-900 mb-4 flex items-center gap-2">
+            <Target size={20} className="text-teal-600"/> Chọn mức độ
+          </div>
+          
+          {/* ★ SỬA: Thêm icon khóa và disable cho level chưa mở */}
           <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-            {[1,2,3,4,5].map(lv => (
-              <button
-                key={lv}
-                onClick={() => handleStartQuiz(lv)}
-                className="py-4 rounded-2xl border border-slate-200 hover:border-teal-300 hover:bg-teal-50 font-black text-slate-800"
-              >
-                Level {lv}
-              </button>
-            ))}
+            {[1,2,3,4,5].map(lv => {
+              const unlocked = isLevelUnlocked(lv);
+              return (
+                <button
+                  key={lv}
+                  onClick={() => handleStartQuiz(lv)}
+                  disabled={!unlocked}
+                  className={`py-4 rounded-2xl border font-black flex items-center justify-center gap-2 transition-all ${
+                    unlocked 
+                      ? 'border-slate-200 hover:border-teal-300 hover:bg-teal-50 text-slate-800 cursor-pointer' 
+                      : 'border-slate-100 bg-slate-50 text-slate-400 cursor-not-allowed'
+                  }`}
+                >
+                  {!unlocked && <Lock size={16} className="text-slate-400"/>}
+                  Level {lv}
+                  {unlocked && lv === 1 && <Star size={14} className="text-amber-500"/>}
+                </button>
+              );
+            })}
+          </div>
+          
+          {/* ★ THÊM: Gợi ý */}
+          <div className="mt-4 text-sm text-slate-500 flex items-center gap-2">
+            <Lock size={14}/> 
+            <span>Hoàn thành level trước với ≥80% để mở khóa level tiếp theo</span>
           </div>
         </div>
       </div>
@@ -1295,56 +1425,145 @@ const App: React.FC = () => {
     </div>
   );
 
+  // ★ SỬA: renderResult - Hiển thị lý thuyết đẹp khi không đạt
   const renderResult = () => {
     if (!quizResult) return null;
     const passed = quizResult.passed;
 
+    // Xử lý các giá trị có thể undefined/NaN
+    const score = typeof quizResult.score === 'number' && !isNaN(quizResult.score) 
+      ? quizResult.score : 0;
+    const totalQuestions = typeof quizResult.totalQuestions === 'number' && 
+      !isNaN(quizResult.totalQuestions) && quizResult.totalQuestions > 0 
+      ? quizResult.totalQuestions 
+      : (quizState.questions.length > 0 ? quizState.questions.length : 1);
+    const percentage = typeof quizResult.percentage === 'number' && !isNaN(quizResult.percentage) 
+      ? quizResult.percentage : Math.round((score / totalQuestions) * 100);
+    const timeSpent = typeof quizResult.timeSpent === 'number' && !isNaN(quizResult.timeSpent) 
+      ? quizResult.timeSpent : elapsedTime || 0;
+    
+    // ★ THÊM: Lấy submissionReason đúng
+    const submissionReason = quizResult.submissionReason || 'normal';
+    const isCheat = submissionReason !== 'normal';
+
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 to-teal-50 p-4">
-        <div className="w-full max-w-2xl bg-white rounded-[2.5rem] shadow-xl border border-slate-200 p-8">
-          <div className="flex items-center gap-4">
-            <div className={`h-14 w-14 rounded-3xl flex items-center justify-center ${passed ? 'bg-emerald-600' : 'bg-rose-600'} text-white`}>
-              {passed ? <CheckCircle size={28}/> : <XCircle size={28}/>}
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-teal-50 p-4">
+        <div className="max-w-2xl mx-auto space-y-6">
+          {/* Kết quả chính */}
+          <div className="bg-white rounded-[2.5rem] shadow-xl border border-slate-200 p-8">
+            <div className="flex items-center gap-4">
+              <div className={`h-14 w-14 rounded-3xl flex items-center justify-center ${passed ? 'bg-emerald-600' : isCheat ? 'bg-orange-600' : 'bg-rose-600'} text-white`}>
+                {passed ? <CheckCircle size={28}/> : isCheat ? <AlertTriangle size={28}/> : <XCircle size={28}/>}
+              </div>
+              <div>
+                <div className="text-3xl font-black text-slate-900">
+                  {passed ? 'Đạt' : isCheat ? 'Vi phạm' : 'Chưa đạt'}
+                </div>
+                <div className="text-slate-600 font-semibold">{quizResult.message || 'Kết quả bài thi'}</div>
+              </div>
             </div>
-            <div>
-              <div className="text-3xl font-black text-slate-900">{passed ? 'Đạt' : 'Chưa đạt'}</div>
-              <div className="text-slate-600 font-semibold">{quizResult.message}</div>
+
+            <div className="mt-6 grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200">
+                <div className="text-xs font-black text-slate-500 uppercase">Điểm</div>
+                <div className="text-2xl font-black text-slate-900">{score}/{totalQuestions}</div>
+              </div>
+              <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200">
+                <div className="text-xs font-black text-slate-500 uppercase">Tỷ lệ</div>
+                <div className={`text-2xl font-black ${percentage >= 80 ? 'text-emerald-600' : 'text-rose-600'}`}>{percentage}%</div>
+              </div>
+              <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200">
+                <div className="text-xs font-black text-slate-500 uppercase">Thời gian</div>
+                <div className="text-2xl font-black text-slate-900">{formatTime(timeSpent)}</div>
+              </div>
+              <div className={`p-4 rounded-2xl border ${isCheat ? 'bg-orange-50 border-orange-200' : 'bg-slate-50 border-slate-200'}`}>
+                <div className="text-xs font-black text-slate-500 uppercase">Lý do nộp</div>
+                <div className={`text-sm font-black ${isCheat ? 'text-orange-700' : 'text-slate-900'}`}>
+                  {submissionReason === 'normal' ? '✓ Bình thường' : 
+                   submissionReason === 'cheat_tab' ? '⚠ Chuyển tab' :
+                   submissionReason === 'cheat_conflict' ? '⚠ Đa thiết bị' :
+                   submissionReason === 'timeout' ? '⏱ Hết giờ' : submissionReason}
+                </div>
+              </div>
+            </div>
+
+            {/* ★ THÊM: Cảnh báo khi vi phạm */}
+            {isCheat && (
+              <div className="mt-6 p-4 rounded-2xl bg-orange-50 border border-orange-200">
+                <div className="flex items-center gap-2 text-orange-800">
+                  <AlertTriangle size={20}/>
+                  <span className="font-black">Bài thi bị nộp tự động do vi phạm quy chế thi</span>
+                </div>
+                <div className="mt-2 text-sm text-orange-700">
+                  {submissionReason === 'cheat_tab' && 'Bạn đã chuyển sang tab/ứng dụng khác trong khi làm bài.'}
+                  {submissionReason === 'cheat_conflict' && 'Phát hiện đăng nhập từ thiết bị khác.'}
+                </div>
+              </div>
+            )}
+
+            <div className="mt-8 flex flex-col md:flex-row gap-3">
+              <button
+                onClick={() => { setView(ViewState.DASHBOARD); setQuizResult(null); setActiveAttempt(null); setTheory(null); }}
+                className="flex-1 py-4 rounded-2xl bg-teal-600 text-white font-black hover:bg-teal-700"
+              >
+                Về trang chính
+              </button>
+              <button
+                onClick={handleOpenLeaderboard}
+                className="flex-1 py-4 rounded-2xl border border-slate-200 font-black text-slate-800 hover:bg-slate-50"
+              >
+                Xem BXH
+              </button>
             </div>
           </div>
 
-          <div className="mt-6 grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200">
-              <div className="text-xs font-black text-slate-500 uppercase">Điểm</div>
-              <div className="text-2xl font-black text-slate-900">{quizResult.score}/{quizResult.totalQuestions}</div>
+          {/* ★ THÊM: Hiển thị lý thuyết khi không đạt */}
+          {!passed && theory && (
+            <div className="bg-white rounded-[2.5rem] shadow-xl border border-amber-200 p-8">
+              <div className="flex items-center gap-3 mb-6">
+                <div className="h-12 w-12 rounded-2xl bg-amber-100 flex items-center justify-center">
+                  <BookMarked className="text-amber-600" size={24}/>
+                </div>
+                <div>
+                  <div className="text-xl font-black text-slate-900">📚 Xem lại lý thuyết</div>
+                  <div className="text-sm text-slate-500">Ôn tập để làm tốt hơn lần sau</div>
+                </div>
+              </div>
+              
+              <div className="text-2xl font-black text-slate-900 mb-4">{theory.title}</div>
+              
+              <div className="prose max-w-none text-slate-700 leading-relaxed">
+                <MathText content={theory.content || ''} />
+              </div>
+              
+              {theory.examples && (
+                <div className="mt-6 p-5 bg-blue-50 rounded-2xl border border-blue-100">
+                  <div className="text-sm font-black text-blue-800 uppercase mb-2 flex items-center gap-2">
+                    <Lightbulb size={16}/> Ví dụ minh họa
+                  </div>
+                  <div className="text-slate-700">
+                    <MathText content={theory.examples} />
+                  </div>
+                </div>
+              )}
+              
+              {theory.tips && (
+                <div className="mt-4 p-5 bg-amber-50 rounded-2xl border border-amber-100">
+                  <div className="text-sm font-black text-amber-800 uppercase mb-2 flex items-center gap-2">
+                    <Star size={16}/> Mẹo & Lưu ý
+                  </div>
+                  <div className="text-slate-700">{theory.tips}</div>
+                </div>
+              )}
+              
+              <button
+                onClick={() => handleSelectTopic(selectedTopic)}
+                className="mt-6 w-full py-4 rounded-2xl bg-amber-500 text-white font-black hover:bg-amber-600 flex items-center justify-center gap-2"
+              >
+                <RotateCcw size={18}/> Làm lại bài
+              </button>
             </div>
-            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200">
-              <div className="text-xs font-black text-slate-500 uppercase">Tỷ lệ</div>
-              <div className="text-2xl font-black text-slate-900">{quizResult.percentage}%</div>
-            </div>
-            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200">
-              <div className="text-xs font-black text-slate-500 uppercase">Thời gian</div>
-              <div className="text-2xl font-black text-slate-900">{formatTime(quizResult.timeSpent)}</div>
-            </div>
-            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200">
-              <div className="text-xs font-black text-slate-500 uppercase">Lý do nộp</div>
-              <div className="text-sm font-black text-slate-900">{quizResult.submissionReason}</div>
-            </div>
-          </div>
-
-          <div className="mt-8 flex flex-col md:flex-row gap-3">
-            <button
-              onClick={() => { setView(ViewState.DASHBOARD); setQuizResult(null); setActiveAttempt(null); }}
-              className="flex-1 py-4 rounded-2xl bg-teal-600 text-white font-black hover:bg-teal-700"
-            >
-              Về trang chính
-            </button>
-            <button
-              onClick={handleOpenLeaderboard}
-              className="flex-1 py-4 rounded-2xl border border-slate-200 font-black text-slate-800 hover:bg-slate-50"
-            >
-              Xem BXH
-            </button>
-          </div>
+          )}
         </div>
       </div>
     );
